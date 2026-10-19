@@ -98,6 +98,7 @@ extension SidebarViewComponents {
                 list.reload(animated: Self.animatesReload(from: previous, to: model.sections))
             }
             lastSections = model.sections
+            if rowsChanged { SidebarNewRowTimer.shared.drew(lastSections, in: window) }
         }
         if listChanged || lastState?.tree != state.tree { refreshNeedsYou() }
         if lastState?.cards != state.cards { cardSlot.show(state.cards); needsLayout = true }
