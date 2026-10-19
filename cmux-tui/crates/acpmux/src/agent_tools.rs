@@ -74,6 +74,18 @@ pub const CUA_SCOPE_ENV: &str = "CMUX_CUA_ALLOWED_TARGET_BUNDLE_IDS";
 /// (`agent::command`).
 pub const MCP_TOOLS_ENV: &str = "CMUX_MCP_TOOLS";
 
+/// The env of the `cmux` server that carries the session's other agent
+/// tool servers (`AgentTools::folded`): a JSON array of `{name, command,
+/// args, env}`. `cmux mcp serve` runs them behind its code mode, so an
+/// agent sees two tools for everything cmux gives it.
+pub const UPSTREAMS_ENV: &str = "CMUX_MCP_UPSTREAMS";
+
+/// A spawn env key (`hub/spawn.rs`) with the comma-separated agent tool
+/// servers this chat turned off (`hub/tools.rs`): a folded server has no
+/// `mcp__<server>` tools for `--disallowedTools` to name, so it leaves the
+/// fold instead. `agent/command.rs` removes the key before the harness starts.
+pub const OFF_ENV: &str = "ACPMUX_AGENT_TOOLS_OFF";
+
 /// The cmux MCP tools of a Chief turn, for the built-in turn presets
 /// (`config::chief_builtins`). Keep equal to optchat-chief's
 /// `session_dir::CHIEF_CMUX_TOOLS`, which sets the same in its own presets.
@@ -244,7 +256,7 @@ pub fn acp_servers_for(
     if left_out(remote_origin, env, &[]) {
         json!([])
     } else {
-        current().scoped(env).for_session(session_id).acp_servers()
+        current().scoped(env).for_session(session_id).folded().acp_servers()
     }
 }
 
@@ -262,6 +274,8 @@ pub fn claude_args_for(
         current()
             .scoped(env)
             .for_session(session_id)
+            .without_off(env)
+            .folded()
             .claude_args(&mcp_config_path(&crate::config::home(), session_id))
     }
 }
@@ -519,6 +533,41 @@ impl AgentTools {
                 })
                 .collect(),
         )
+    }
+
+    /// Without the servers [`OFF_ENV`] names (the chat turned them off).
+    pub fn without_off(mut self, env: &BTreeMap<String, String>) -> Self {
+        if let Some(off) = env.get(OFF_ENV) {
+            let off: Vec<&str> = off.split(',').map(str::trim).collect();
+            self.servers.retain(|s| !off.contains(&s.name.as_str()));
+        }
+        self
+    }
+
+    /// Code mode for every agent tool: the other servers, as `scoped` and
+    /// `for_session` left them (the Chief's turns keep none), go into the
+    /// `cmux` server's [`UPSTREAMS_ENV`] and leave the list. Without a
+    /// `cmux` server (cmux.json turns MCP off) they stay as they are.
+    pub fn folded(mut self) -> Self {
+        let Some(at) = self.servers.iter().position(|s| s.name == "cmux") else {
+            return self;
+        };
+        let mut cmux = self.servers.remove(at);
+        cmux.env.retain(|(k, _)| k != UPSTREAMS_ENV);
+        if !self.servers.is_empty() {
+            let upstreams: Vec<Value> = self
+                .servers
+                .iter()
+                .map(|s| {
+                    let env: Map<String, Value> =
+                        s.env.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
+                    json!({"name": s.name, "command": s.command, "args": s.args, "env": env})
+                })
+                .collect();
+            cmux.env.push((UPSTREAMS_ENV.to_owned(), Value::Array(upstreams).to_string()));
+        }
+        self.servers = vec![cmux];
+        self
     }
 
     /// The servers as one Claude Code MCP config, or `None` without servers.
