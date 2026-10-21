@@ -36,7 +36,8 @@ extension NotificationCenterService {
     func readTabs(enteringScreen shown: [TabModel], appActive: Bool) {
         let entered = Set(TabUnreadMark.entered(shown.map(\.id), previous: shownTabIDs))
         shownTabIDs = Set(shown.map(\.id))
-        _ = (entered, appActive)
+        guard appActive else { return }
+        for tab in shown where entered.contains(tab.id) { interacted(.focus, tab: tab) }
     }
 
     /// Clears the manual mark (Mark Tab Unread, `TabUnreadMark`) of each tab
@@ -74,31 +75,44 @@ extension NotificationCenterService {
     /// switch and a click on its row, with the keyboard still in the sidebar,
     /// a text field, or a page focus does not name. Only `store`'s tabs.
     func viewedTab(in controller: WindowController, store: DaemonStore) -> TabModel? {
-        let resolved = controller.focus.state.resolved
-        guard let id = Self.contentTab(resolved), let pane = resolved.pane else { return nil }
+        let state = controller.focus.state
+        let pane: String, id: String
+        if let resolvedPane = state.resolved.pane, let resolvedTab = state.resolved.tab {
+            (pane, id) = (resolvedPane, resolvedTab)
+        } else if controller.state.page == nil, let focusedPane = state.resolved.pane ?? state.pane,
+                  let selected = state.topology.panes.first(where: { $0.id == focusedPane })?.selected {
+            (pane, id) = (focusedPane, selected)
+        } else {
+            return nil
+        }
         guard let model = controller.content?.paneModel(key: pane), store.pane(model.handle) === model else { return nil }
         return model.tabs.first { $0.id == id }
     }
 
-    /// The tabs on screen: in each visible window that shows a workspace, the
-    /// selected tab of every pane on its active screen. Only `store`'s tabs.
+    /// The tabs on screen: in each window that shows a workspace, the selected
+    /// tab of every pane in its viewport. Classic counted a rendered pane of
+    /// the selected workspace, whatever covered the window. Only `store`'s tabs.
     func shownTabs(_ store: DaemonStore) -> [TabModel] {
         guard let services else { return [] }
-        return services.windows.controllers.flatMap { controller in
-            controller.window?.occlusionState.contains(.visible) == true ? shownTabs(in: controller, store: store) : []
-        }
+        return services.windows.controllers.flatMap { shownTabs(in: $0, store: store) }
     }
 
-    /// The selected tab of every pane on `controller`'s active screen (none under a top page).
+    /// The selected tab of every pane in `controller`'s viewport (none under a
+    /// top page). Read from observed state (the layout's visible panes, the
+    /// window's tab selection, the panes' tabs), so a tab switch in a pane
+    /// without focus, or a column scrolled into view, runs the pass at once.
     func shownTabs(in controller: WindowController, store: DaemonStore) -> [TabModel] {
         guard controller.state.page == nil, let content = controller.content else { return [] }
         let layout = content.layoutModel
         guard let screen = layout.screens.first(where: { $0.id == layout.activeScreenID }) else { return [] }
-        let topology = controller.focus.state.topology
+        let visible = layout.visiblePanes
         return screen.layout.panes.compactMap { pane in
-            guard let model = content.paneModel(key: pane.rawValue), store.pane(model.handle) === model,
-                  let id = topology.panes.first(where: { $0.id == pane.rawValue })?.selected else { return nil }
-            return model.tabs.first { $0.id == id }
+            guard visible.contains(pane), let model = content.paneModel(key: pane.rawValue),
+                  store.pane(model.handle) === model, !model.tabs.isEmpty else { return nil }
+            // A selection naming a tab that just closed falls back as the focus topology does.
+            let fallback = model.tabs[min(max(model.defaultTabIndex, 0), model.tabs.count - 1)]
+            let id = controller.state.selection.selection(in: model.id)
+            return model.tabs.first { $0.id == id } ?? fallback
         }
     }
 }
