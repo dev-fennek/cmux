@@ -135,9 +135,13 @@ public struct ViewedProgramStatus: Equatable, Sendable {
 }
 
 /// The viewed tabs' facts and the revision of which tabs are viewed (bumped
-/// when a window's settled focus changes).
+/// when a window's settled focus changes). `shown` are the tabs on screen in
+/// a shown workspace (each pane's selected tab), whose arrivals read them.
 public struct ViewedTabsFacts: Equatable, Sendable {
     public var revision: UInt64
     public var tabs: [ViewedProgramStatus]
-    public init(revision: UInt64, tabs: [ViewedProgramStatus]) { (self.revision, self.tabs) = (revision, tabs) }
+    public var shown: [String]
+    public init(revision: UInt64, tabs: [ViewedProgramStatus], shown: [String] = []) {
+        (self.revision, self.tabs, self.shown) = (revision, tabs, shown)
+    }
 }

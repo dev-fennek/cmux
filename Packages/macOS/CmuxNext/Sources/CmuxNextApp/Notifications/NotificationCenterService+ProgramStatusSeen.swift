@@ -22,9 +22,21 @@ extension NotificationCenterService {
                 guard let self else { return }
                 let viewed = self.viewedTabs(store)
                 for tab in viewed { self.interacted(.focus, tab: tab) }
+                self.readTabs(enteringScreen: self.shownTabs(store), appActive: NSApp.isActive)
                 self.clearTabMarks(entering: viewed)
             }
         }
+    }
+
+    /// Reads each tab of `shown` that came on screen since the last pass,
+    /// while cmux is active: classic read a pane that became visible in the
+    /// selected workspace (a workspace switch shows its splits, a tab switch
+    /// shows that tab). A notification arriving on a tab already on screen,
+    /// but not focused, keeps its ring until the pane is looked at.
+    func readTabs(enteringScreen shown: [TabModel], appActive: Bool) {
+        let entered = Set(TabUnreadMark.entered(shown.map(\.id), previous: shownTabIDs))
+        shownTabIDs = Set(shown.map(\.id))
+        _ = (entered, appActive)
     }
 
     /// Clears the manual mark (Mark Tab Unread, `TabUnreadMark`) of each tab
@@ -44,18 +56,48 @@ extension NotificationCenterService {
     /// whether they hold an unread notification.
     func viewedFacts(_ store: DaemonStore) -> ViewedTabsFacts {
         ViewedTabsFacts(revision: viewedRevision,
-                        tabs: viewedTabs(store).map { ViewedProgramStatus(tab: $0.id, records: $0.programStatus, unread: $0.hasUnread) })
+                        tabs: viewedTabs(store).map { ViewedProgramStatus(tab: $0.id, records: $0.programStatus, unread: $0.hasUnread) },
+                        shown: shownTabs(store).map(\.id))
     }
 
     /// The tabs shown in a key window while cmux is active: each window's
-    /// focused tab, found in its own pane (O(1) per window). Only `store`'s
-    /// tabs (the local daemon's).
+    /// focused tab (O(1) per window). Only `store`'s tabs (the local daemon's).
     func viewedTabs(_ store: DaemonStore) -> [TabModel] {
         guard let services, NSApp.isActive else { return [] }
         return services.windows.controllers.compactMap { controller in
-            let resolved = controller.focus.state.resolved
-            guard controller.focus.state.windowKey, let id = Self.contentTab(resolved), let pane = resolved.pane,
-                  let model = controller.content?.paneModel(key: pane), store.pane(model.handle) === model else { return nil }
+            controller.focus.state.windowKey ? viewedTab(in: controller, store: store) : nil
+        }
+    }
+
+    /// The focused pane's selected tab in `controller`, wherever the keyboard
+    /// is: classic read the selected workspace's focused pane on a workspace
+    /// switch and a click on its row, with the keyboard still in the sidebar,
+    /// a text field, or a page focus does not name. Only `store`'s tabs.
+    func viewedTab(in controller: WindowController, store: DaemonStore) -> TabModel? {
+        let resolved = controller.focus.state.resolved
+        guard let id = Self.contentTab(resolved), let pane = resolved.pane else { return nil }
+        guard let model = controller.content?.paneModel(key: pane), store.pane(model.handle) === model else { return nil }
+        return model.tabs.first { $0.id == id }
+    }
+
+    /// The tabs on screen: in each visible window that shows a workspace, the
+    /// selected tab of every pane on its active screen. Only `store`'s tabs.
+    func shownTabs(_ store: DaemonStore) -> [TabModel] {
+        guard let services else { return [] }
+        return services.windows.controllers.flatMap { controller in
+            controller.window?.occlusionState.contains(.visible) == true ? shownTabs(in: controller, store: store) : []
+        }
+    }
+
+    /// The selected tab of every pane on `controller`'s active screen (none under a top page).
+    func shownTabs(in controller: WindowController, store: DaemonStore) -> [TabModel] {
+        guard controller.state.page == nil, let content = controller.content else { return [] }
+        let layout = content.layoutModel
+        guard let screen = layout.screens.first(where: { $0.id == layout.activeScreenID }) else { return [] }
+        let topology = controller.focus.state.topology
+        return screen.layout.panes.compactMap { pane in
+            guard let model = content.paneModel(key: pane.rawValue), store.pane(model.handle) === model,
+                  let id = topology.panes.first(where: { $0.id == pane.rawValue })?.selected else { return nil }
             return model.tabs.first { $0.id == id }
         }
     }

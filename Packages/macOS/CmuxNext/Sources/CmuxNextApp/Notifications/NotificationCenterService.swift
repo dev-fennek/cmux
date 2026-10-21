@@ -38,6 +38,9 @@ final class NotificationCenterService {
     /// The tabs viewed at the last viewed-tab pass: a tab marked unread
     /// (Mark Tab Unread) clears when it comes into view, not while it stays.
     @ObservationIgnored var viewedTabIDs: Set<String> = []
+    /// The tabs on screen at the last pass: a tab read when it comes on
+    /// screen, as classic read a pane that became visible.
+    @ObservationIgnored var shownTabIDs: Set<String> = []
     @ObservationIgnored let desktop = DesktopNotifier()
     /// A passkey request's banner was clicked (its request id): the passkey hand-off answers it
     /// (plans/cmux-next/agent-browser-passkey-DESIGN.md 3.2).
