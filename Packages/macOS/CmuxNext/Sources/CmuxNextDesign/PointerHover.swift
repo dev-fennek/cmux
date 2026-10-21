@@ -92,7 +92,12 @@ public final class PointerHover: NSObject {
     /// target's creation order (refreshes run targets in it).
     fileprivate var indexedWindow: ObjectIdentifier?
     fileprivate var order: UInt64 = 0
-    fileprivate var viewWindow: NSWindow? { view?.window }
+    /// The view's window; nil while that window deallocates (its teardown moves the view out, and
+    /// a weak reference to it aborts the runtime: "Cannot form weak reference to instance").
+    fileprivate var viewWindow: NSWindow? {
+        guard let window = view?.window, canFormWeakReference(to: window) else { return nil }
+        return window
+    }
 
     private func computeHovering() -> Bool {
         guard let view, let window = view.window, !view.isHiddenOrHasHiddenAncestor, isHoverable(),
@@ -253,6 +258,16 @@ private final class KeyWindowObserver {
             for token in tokens { NotificationCenter.default.removeObserver(token) }
         }
     }
+}
+
+/// False for an object in deallocation: the runtime's own test before it forms a weak reference
+/// (`-[NSObject allowsWeakReference]`, which ARC headers mark unavailable).
+@MainActor
+private func canFormWeakReference(to object: NSObject) -> Bool {
+    let selector = NSSelectorFromString("allowsWeakReference")
+    guard let method = object.method(for: selector) else { return true }
+    typealias AllowsWeakReference = @convention(c) (NSObject, Selector) -> Bool
+    return unsafeBitCast(method, to: AllowsWeakReference.self)(object, selector)
 }
 
 /// `PointerHover`'s targets filed by window (cx-8w027.10 item c): a refresh reads one window's
